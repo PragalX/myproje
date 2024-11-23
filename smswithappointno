@@ -1,0 +1,196 @@
+import uuid
+from datetime import datetime
+from twilio.rest import Client
+import sqlite3
+
+# Twilio credentials
+ACCOUNT_SID = 'ACbd299c346a136d15c7c1776b9a09e501'
+AUTH_TOKEN = '1d9b627ad3f77f36b0f764c0f4d48ce1'
+FROM_PHONE = '+14155238886'  # Your Twilio phone number
+
+# Create Twilio client
+client = Client(ACCOUNT_SID, AUTH_TOKEN)
+
+# SQLite Database setup
+conn = sqlite3.connect('clinic.db')
+c = conn.cursor()
+
+# Create the appointments table if it doesn't exist
+c.execute('''
+    CREATE TABLE IF NOT EXISTS appointments (
+        appointment_number TEXT PRIMARY KEY,
+        name TEXT,
+        date TEXT,
+        time TEXT,
+        phone TEXT,
+        amount REAL,
+        status TEXT
+    )
+''')
+conn.commit()
+
+# Function to send SMS
+def send_sms(phone_number, message):
+    try:
+        client.messages.create(
+            to=phone_number,
+            from_=FROM_PHONE,
+            body=message
+        )
+    except Exception as e:
+        print(f"Error sending SMS: {e}")
+
+# Function to search for an appointment by appointment number
+def search_patient_by_appointment():
+    appointment_number = input("Enter appointment number to search: ")
+
+    # Search appointment in the database
+    c.execute("SELECT * FROM appointments WHERE appointment_number = ?", (appointment_number,))
+    patient = c.fetchone()
+
+    if patient:
+        print(f"Appointment found:\n"
+              f"Name: {patient[1]}\n"
+              f"Date: {patient[2]}\n"
+              f"Time: {patient[3]}\n"
+              f"Phone: {patient[4]}\n"
+              f"Amount: {patient[5]}\n"
+              f"Status: {patient[6]}")
+        
+        # Give options to complete, abort, or reschedule
+        print("\nChoose an option:")
+        print("1. Complete Appointment")
+        print("2. Abort Appointment")
+        print("3. Reschedule Appointment")
+        choice = input("Enter choice (1/2/3): ")
+
+        # Handle different choices
+        if choice == '1':  # Complete
+            c.execute("UPDATE appointments SET status = ? WHERE appointment_number = ?", ('Completed', appointment_number))
+            conn.commit()
+            sms_message = f"Your appointment with Dr. has been completed on {patient[2]} at {patient[3]}. Your appointment number is {appointment_number}."
+            send_sms(patient[4], sms_message)
+            print("Appointment marked as completed and SMS sent.")
+
+        elif choice == '2':  # Abort
+            c.execute("UPDATE appointments SET status = ? WHERE appointment_number = ?", ('Cancelled', appointment_number))
+            conn.commit()
+            sms_message = f"Your appointment with Dr. scheduled on {patient[2]} at {patient[3]} has been cancelled. Appointment number: {appointment_number}."
+            send_sms(patient[4], sms_message)
+            print("Appointment cancelled and SMS sent.")
+
+        elif choice == '3':  # Reschedule
+            new_time = input("Enter new time slot (HH:MM): ")
+            c.execute("UPDATE appointments SET time = ?, status = ? WHERE appointment_number = ?", (new_time, 'Rescheduled', appointment_number))
+            conn.commit()
+            sms_message = f"Your appointment with Dr. has been rescheduled to {new_time} on {patient[2]}. Appointment number: {appointment_number}."
+            send_sms(patient[4], sms_message)
+            print(f"Appointment rescheduled to {new_time} and SMS sent.")
+        
+        else:
+            print("Invalid choice.")
+    else:
+        print("No patient found with that appointment number.")
+
+# Function to book a new appointment
+def book_appointment():
+    name = input("Enter patient's name: ")
+    appointment_date = input("Enter appointment date (YYYY-MM-DD): ")
+    appointment_time = input("Enter appointment time (HH:MM): ")
+    phone_number = input("Enter patient's phone number: ")
+    amount = float(input("Enter amount: "))
+
+    # Generate unique appointment number
+    date_str = datetime.now().strftime("%Y%m%d%H%M%S")
+    appointment_number = f"HOSP-{date_str}-{uuid.uuid4().hex[:4].upper()}"
+    
+    # Insert the appointment into the database
+    c.execute("INSERT INTO appointments (appointment_number, name, date, time, phone, amount, status) "
+              "VALUES (?, ?, ?, ?, ?, ?, ?)",
+              (appointment_number, name, appointment_date, appointment_time, phone_number, amount, 'Booked'))
+    conn.commit()
+
+    # Send SMS confirmation
+    sms_message = f"Your appointment with Dr. has been booked for {appointment_date} at {appointment_time}. Appointment number: {appointment_number}. Amount: ₹{amount}."
+    send_sms(phone_number, sms_message)
+
+    print(f"Appointment booked successfully. Your appointment number is {appointment_number}.")
+    print(f"Receipt: \nAppointment No: {appointment_number}\nName: {name}\nDate: {appointment_date}\nTime: {appointment_time}\nAmount: ₹{amount}")
+
+# Function to view all appointments
+def view_all_appointments():
+    c.execute("SELECT * FROM appointments")
+    appointments = c.fetchall()
+    
+    if appointments:
+        print("\nList of All Appointments:")
+        for appointment in appointments:
+            print(f"Appointment Number: {appointment[0]}, Name: {appointment[1]}, Date: {appointment[2]}, Time: {appointment[3]}, Phone: {appointment[4]}, Amount: ₹{appointment[5]}, Status: {appointment[6]}")
+    else:
+        print("No appointments found.")
+
+# Function to cancel an appointment
+def cancel_appointment():
+    appointment_number = input("Enter appointment number to cancel: ")
+
+    # Search appointment in the database
+    c.execute("SELECT * FROM appointments WHERE appointment_number = ?", (appointment_number,))
+    patient = c.fetchone()
+
+    if patient:
+        c.execute("UPDATE appointments SET status = ? WHERE appointment_number = ?", ('Cancelled', appointment_number))
+        conn.commit()
+        sms_message = f"Your appointment scheduled on {patient[2]} at {patient[3]} has been cancelled. Appointment number: {appointment_number}."
+        send_sms(patient[4], sms_message)
+        print(f"Appointment {appointment_number} cancelled and SMS sent.")
+    else:
+        print("Appointment not found.")
+
+# Function to reschedule an appointment
+def reschedule_appointment():
+    appointment_number = input("Enter appointment number to reschedule: ")
+
+    # Search appointment in the database
+    c.execute("SELECT * FROM appointments WHERE appointment_number = ?", (appointment_number,))
+    patient = c.fetchone()
+
+    if patient:
+        new_time = input("Enter new time slot (HH:MM): ")
+        c.execute("UPDATE appointments SET time = ?, status = ? WHERE appointment_number = ?", (new_time, 'Rescheduled', appointment_number))
+        conn.commit()
+        sms_message = f"Your appointment has been rescheduled to {new_time} on {patient[2]}. Appointment number: {appointment_number}."
+        send_sms(patient[4], sms_message)
+        print(f"Appointment rescheduled to {new_time} and SMS sent.")
+    else:
+        print("Appointment not found.")
+
+# Main function to navigate through options
+def main():
+    while True:
+        print("\nClinic Management System\n")
+        print("1. Book New Appointment")
+        print("2. View All Appointments")
+        print("3. Cancel Appointment")
+        print("4. Reschedule Appointment")
+        print("5. Search Patient by Appointment Number")
+        print("6. Exit")
+        
+        choice = input("\nEnter choice: ")
+
+        if choice == '1':
+            book_appointment()
+        elif choice == '2':
+            view_all_appointments()
+        elif choice == '3':
+            cancel_appointment()
+        elif choice == '4':
+            reschedule_appointment()
+        elif choice == '5':
+            search_patient_by_appointment()
+        elif choice == '6':
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
+if __name__ == "__main__":
+    main()
